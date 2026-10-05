@@ -1,0 +1,50 @@
+# =============================================================================
+# CareerLens — render.yaml
+# Auto-deploy configuration for Render.com
+# Docs: https://render.com/docs/blueprint-spec
+# =============================================================================
+
+services:
+  - type: web
+    name: careerlens
+    runtime: python
+    region: singapore          # Closest to India; change to: ohio / oregon / frankfurt
+    plan: free                 # free | starter ($7/mo) | standard ($25/mo)
+
+    # ── Build ────────────────────────────────────────────────────────────────
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+
+    # ── Start ────────────────────────────────────────────────────────────────
+    startCommand: gunicorn -c gunicorn.conf.py app:app
+
+    # ── Health check ─────────────────────────────────────────────────────────
+    healthCheckPath: /
+
+    # ── Persistent disk (SQLite DB + uploads) ────────────────────────────────
+    # NOTE: Requires Starter plan ($7/mo) or higher.
+    # On free tier, SQLite resets on every deploy — upgrade to keep data.
+    disk:
+      name: careerlens-data
+      mountPath: /app/data
+      sizeGB: 1
+
+    # ── Environment variables ─────────────────────────────────────────────────
+    # Set secret values in the Render dashboard → Environment tab.
+    # Variables listed here with no value will prompt you to fill them in.
+    envVars:
+      - key: FLASK_SECRET_KEY
+        generateValue: true          # Render auto-generates a secure random value
+      - key: GROQ_API_KEY
+        sync: false                  # Must be set manually in Render dashboard
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: DATABASE_PATH
+        value: /app/data/careerlens.db
+      - key: SITE_URL
+        value: https://careerlens.in  # UPDATE THIS after you buy/verify your domain
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PORT
+        value: 10000                 # Render's default web port

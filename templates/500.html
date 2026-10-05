@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Server Error — CareerLens</title>
+  <meta name="description" content="Something went wrong. Return to CareerLens.">
+  <meta name="robots" content="noindex, follow">
+  <link rel="icon" href="/static/favicon.png" type="image/png">
+  <style>
+    body { min-height: 100vh; display: flex; align-items: center; justify-content: center;
+           background: linear-gradient(135deg, #0f0f1a 0%, #1a0a2e 100%); font-family: 'Inter', sans-serif; }
+    .error-box { text-align: center; padding: 3rem 2rem; max-width: 500px; }
+    .error-code { font-size: 7rem; font-weight: 900; background: linear-gradient(135deg, #EF4444, #F97316);
+                  -webkit-background-clip: text; -webkit-text-fill-color: transparent; line-height: 1; }
+    .error-title { color: #fff; font-size: 1.8rem; font-weight: 700; margin: 1rem 0 0.5rem; }
+    .error-msg { color: #a0a0b8; font-size: 1rem; margin-bottom: 2rem; }
+    .btn-home { display: inline-block; padding: 0.8rem 2rem; background: linear-gradient(135deg, #7C3AED, #5B21B6);
+                color: #fff; border-radius: 50px; text-decoration: none; font-weight: 600;
+                transition: transform 0.2s; }
+    .btn-home:hover { transform: translateY(-2px); }
+  </style>
+</head>
+<body>
+  <div class="error-box">
+    <div class="error-code">500</div>
+    <h1 class="error-title">Something Went Wrong</h1>
+    <p class="error-msg">Our servers hit an unexpected issue. We've logged it and will fix it shortly.<br>Please try again in a moment.</p>
+    <a href="/" class="btn-home">🏠 Back to CareerLens</a>
+  </div>
+</body>
+</html>

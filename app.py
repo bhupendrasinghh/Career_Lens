@@ -1,19 +1,25 @@
 """
-Career Lens — Main Flask Application
-Registers all blueprints and preserves original analyze/upload routes.
-Adds SEO endpoints (robots.txt, sitemap.xml) and DB persistence for analyses.
+CareerLens — Main Flask Application (Production)
+Registers all blueprints, SEO routes, DB persistence, and production middleware.
 """
 
 import os
 import re
 import uuid
 import json
+import logging
 from datetime import datetime
 
 import fitz
 from flask import (
     Flask, render_template, request, jsonify,
-    session, Response, send_from_directory
+    session, Response, send_from_directory, redirect, url_for
+)
+
+# ── Logging setup (outputs to stdout → Render log stream) ─────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
 from ats_analyzer import analyze_resume
@@ -38,11 +44,33 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-replace-in-production")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024   # 16 MB global limit
 
-# Site configuration for SEO
-SITE_URL  = os.getenv("SITE_URL", "http://careerlens")
+# ── Site configuration ─────────────────────────────────────────────────────────
+# SITE_URL is set via environment variable on Render/production.
+# Default falls back to the real domain (not localhost) so SEO tags are always correct.
+SITE_URL  = os.getenv("SITE_URL", "https://careerlens.in")
 SITE_NAME = "CareerLens"
 
-# Register blueprints
+# ── Production middleware ──────────────────────────────────────────────────────
+@app.before_request
+def enforce_https_and_headers():
+    """Force HTTPS on production (Render sends X-Forwarded-Proto header)."""
+    if request.headers.get("X-Forwarded-Proto") == "http":
+        url = request.url.replace("http://", "https://", 1)
+        return redirect(url, code=301)
+
+@app.after_request
+def add_security_headers(response):
+    """Add security + SEO-friendly HTTP headers to every response."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Cache static assets aggressively; don't cache API responses
+    if request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+# ── Blueprints ─────────────────────────────────────────────────────────────────
 app.register_blueprint(auth_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(interview_bp)
@@ -226,6 +254,7 @@ def analyze_career_skills(resume_text, role):
 
 @app.route("/robots.txt")
 def robots_txt():
+    """Serve robots.txt — allow Googlebot to crawl public pages only."""
     content = f"""User-agent: *
 Allow: /
 Disallow: /auth/
@@ -235,19 +264,23 @@ Disallow: /portfolio/
 Disallow: /interview/
 Disallow: /chatbot/
 
+# CareerLens official sitemap
 Sitemap: {SITE_URL}/sitemap.xml
 """
-    return Response(content, mimetype="text/plain")
+    resp = Response(content, mimetype="text/plain")
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
 
 
 @app.route("/sitemap.xml")
 def sitemap_xml():
+    """Serve XML sitemap with canonical HTTPS public URLs for Google Search Console."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
     pages = [
-        {"loc": SITE_URL + "/",             "priority": "1.0", "changefreq": "weekly"},
-        {"loc": SITE_URL + "/#features",    "priority": "0.8", "changefreq": "monthly"},
-        {"loc": SITE_URL + "/#how",         "priority": "0.7", "changefreq": "monthly"},
-        {"loc": SITE_URL + "/#resume",      "priority": "0.9", "changefreq": "weekly"},
+        {"loc": SITE_URL + "/",           "priority": "1.0", "changefreq": "weekly"},
+        {"loc": SITE_URL + "/#features",  "priority": "0.8", "changefreq": "monthly"},
+        {"loc": SITE_URL + "/#how",       "priority": "0.7", "changefreq": "monthly"},
+        {"loc": SITE_URL + "/#resume",    "priority": "0.9", "changefreq": "weekly"},
     ]
     xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>']
     xml_parts.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
@@ -259,7 +292,9 @@ def sitemap_xml():
     <priority>{page['priority']}</priority>
   </url>""")
     xml_parts.append("</urlset>")
-    return Response("\n".join(xml_parts), mimetype="application/xml")
+    resp = Response("\n".join(xml_parts), mimetype="application/xml")
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
 
 
 @app.route("/favicon.ico")
@@ -269,6 +304,24 @@ def favicon():
         "favicon.png",
         mimetype="image/png"
     )
+
+
+# ─── Error handlers (SEO: proper 404/500 pages) ────────────────────────────────
+
+@app.errorhandler(404)
+def not_found(e):
+    """Return a branded 404 — ensures Googlebot gets real 404 status, not 200."""
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify(error="Not found"), 404
+    return render_template("404.html"), 404
+
+
+@app.errorhandler(500)
+def server_error(e):
+    logging.exception("Internal server error")
+    if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+        return jsonify(error="Internal server error"), 500
+    return render_template("500.html"), 500
 
 
 # ─── Original routes (UNCHANGED core logic, now with DB persistence) ──────────
@@ -464,10 +517,14 @@ def get_stored_resume():
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
+# Always initialize DB (picked up by Gunicorn on_starting hook too)
+init_db()
 
 if __name__ == "__main__":
-    init_db()
     port = int(os.environ.get("PORT", 5001))
     host = os.environ.get("HOST", "0.0.0.0")
-    print(f"Starting Career Lens on http://127.0.0.1:{port} (accessible via http://localhost:{port} or custom host)")
-    app.run(debug=True, host=host, port=port)
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    print(f"\n🚀 CareerLens starting on http://127.0.0.1:{port}")
+    print(f"   SITE_URL  : {SITE_URL}")
+    print(f"   Debug mode: {debug}")
+    app.run(debug=debug, host=host, port=port)
