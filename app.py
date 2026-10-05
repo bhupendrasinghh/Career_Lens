@@ -58,6 +58,52 @@ def enforce_https_and_headers():
         url = request.url.replace("http://", "https://", 1)
         return redirect(url, code=301)
 
+
+@app.before_request
+def sync_user_resume_and_session():
+    """Auto-restore resume from DB on login, or auto-persist uploaded resume on login."""
+    uid = session.get("user_id")
+    if not uid:
+        return
+
+    rid = session.get("resume_id")
+    # 1. If user uploaded a resume before logging in, auto-save it to DB on login
+    if rid and not session.get("resume_db_id"):
+        text = resume_cache.get(rid)
+        if text:
+            meta = session.get("resume_meta") or {}
+            try:
+                db_id = save_resume_to_db(
+                    user_id=uid,
+                    filename=rid + ".pdf",
+                    original_name=meta.get("filename", "resume.pdf"),
+                    file_size=meta.get("file_size", len(text.encode("utf-8"))),
+                    word_count=meta.get("word_count", len(text.split())),
+                    char_count=meta.get("char_count", len(text)),
+                    raw_text=text,
+                )
+                session["resume_db_id"] = db_id
+                logging.getLogger(__name__).info(f"Auto-saved anonymous resume for user {uid}")
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Could not auto-save anonymous resume: {e}")
+
+    # 2. If user is logged in but has no active resume in session cache, auto-restore from DB
+    elif not rid or rid not in resume_cache:
+        try:
+            resume_row = get_active_resume(uid)
+            if resume_row and resume_row.get("raw_text"):
+                new_rid = str(uuid.uuid4())
+                resume_cache[new_rid] = resume_row["raw_text"]
+                session["resume_id"] = new_rid
+                session["resume_db_id"] = resume_row["id"]
+                session["resume_meta"] = {
+                    "filename": resume_row["original_name"],
+                    "word_count": resume_row.get("word_count", 0),
+                    "char_count": resume_row.get("char_count", 0),
+                }
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Could not auto-restore resume from DB: {e}")
+
 @app.after_request
 def add_security_headers(response):
     """Add security + SEO-friendly HTTP headers to every response."""
@@ -351,6 +397,13 @@ def upload():
         char_count  = len(text)
         file_size   = len(file_bytes)
         original_nm = f.filename
+
+        session["resume_meta"] = {
+            "filename": original_nm,
+            "file_size": file_size,
+            "word_count": word_count,
+            "char_count": char_count,
+        }
 
         # Persist resume to DB if user is logged in
         resume_db_id = None
