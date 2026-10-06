@@ -8,7 +8,7 @@ import re
 import uuid
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import fitz
 from flask import (
@@ -41,8 +41,14 @@ from ai_service import (
 # ─── App setup ────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-replace-in-production")
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024   # 16 MB global limit
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "career-lens-secure-key-2026")
+app.config.update(
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,   # 16 MB global limit
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,            # Allow both HTTP (LAN devices) & HTTPS (production)
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
 
 # ── Site configuration ─────────────────────────────────────────────────────────
 # SITE_URL is set via environment variable on Render/production.

@@ -1,40 +1,34 @@
 """
 Career Lens — Authentication Blueprint
 Handles user registration, login, logout, and profile management.
+Centralized database authentication without device or browser binding.
 """
 
 from flask import Blueprint, request, jsonify, session
-import hashlib, secrets, re
-from database import get_db, row_to_dict
+import re
+from database import (
+    create_user,
+    get_user_by_identifier,
+    get_user_by_id,
+    update_user_profile,
+    update_user_password,
+    verify_password,
+    hash_password,
+    get_db,
+    row_to_dict,
+)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def hash_password(password: str, salt: str = None):
-    """Hash a password with a random salt using SHA-256."""
-    if salt is None:
-        salt = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"{salt}:{hashed}"
-
-
-def verify_password(stored: str, provided: str) -> bool:
-    """Verify a password against its stored hash."""
-    try:
-        salt, _ = stored.split(":", 1)
-        return stored == hash_password(provided, salt)
-    except Exception:
-        return False
-
-
-def is_valid_gmail(email: str) -> bool:
-    """Validate that the email address ends strictly with @gmail.com."""
+def is_valid_email(email: str) -> bool:
+    """Validate that the email address conforms to standard email format."""
     if not email:
         return False
     email = email.strip().lower()
-    return bool(re.match(r"^[a-zA-Z0-9._%+-]+@gmail\.com$", email))
+    return bool(re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email))
 
 
 def current_user_id():
@@ -57,81 +51,78 @@ def register():
 
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
+    username = (data.get("username") or "").strip().lower() or None
     password = data.get("password") or ""
 
     if not name:
         return jsonify(error="Name is required."), 400
-    if not is_valid_gmail(email):
-        return jsonify(error="Invalid Gmail: Email must end strictly with @gmail.com (e.g. yourname@gmail.com)."), 400
+    if not email:
+        return jsonify(error="Email is required."), 400
+    if not is_valid_email(email):
+        return jsonify(error="Please enter a valid email address (e.g. yourname@gmail.com)."), 400
     if len(password) < 8:
         return jsonify(error="Password must be at least 8 characters."), 400
 
-    conn = get_db()
     try:
-        existing = conn.execute(
-            "SELECT id FROM users WHERE email = ?", (email,)
-        ).fetchone()
-        if existing:
-            return jsonify(error="An account with this email already exists."), 409
+        user = create_user(name=name, email=email, password=password, username=username)
 
-        ph = hash_password(password)
-        conn.execute(
-            "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
-            (name, email, ph)
-        )
-        conn.commit()
-
-        user = row_to_dict(conn.execute(
-            "SELECT id, name, email FROM users WHERE email = ?", (email,)
-        ).fetchone())
-
+        # Session-based authentication — independent of device or browser
+        session.permanent = True
         session["user_id"] = user["id"]
         session["user_name"] = user["name"]
         session["user_email"] = user["email"]
+        session["username"] = user.get("username", "")
 
         return jsonify(
             message="Account created successfully.",
-            user={"id": user["id"], "name": user["name"], "email": user["email"]}
+            user={
+                "id": user["id"],
+                "name": user["name"],
+                "email": user["email"],
+                "username": user.get("username", ""),
+            }
         ), 201
 
+    except ValueError as ve:
+        return jsonify(error=str(ve)), 409
     except Exception as e:
         return jsonify(error=f"Registration failed: {e}"), 500
-    finally:
-        conn.close()
 
 
 @auth_bp.route("/login", methods=["POST"])
 def login():
     data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
+    # Accept 'email', 'username', 'identifier', or 'login' for flexibility across devices
+    identifier = (
+        data.get("email") or data.get("username") or data.get("identifier") or data.get("login") or ""
+    ).strip()
     password = data.get("password") or ""
 
-    if not email or not password:
-        return jsonify(error="Email and password are required."), 400
+    if not identifier or not password:
+        return jsonify(error="Email/username and password are required."), 400
 
-    if not is_valid_gmail(email):
-        return jsonify(error="Invalid Gmail: Email must end with @gmail.com to sign in."), 400
+    # Look up user in central database by email OR username (case-insensitive)
+    user = get_user_by_identifier(identifier)
 
-    conn = get_db()
-    try:
-        user = row_to_dict(conn.execute(
-            "SELECT id, name, email, password_hash FROM users WHERE email = ?",
-            (email,)
-        ).fetchone())
+    if not user or not verify_password(user["password_hash"], password):
+        return jsonify(error="Invalid email/username or password."), 401
 
-        if not user or not verify_password(user["password_hash"], password):
-            return jsonify(error="Invalid email or password."), 401
+    # Session-based authentication — works from any laptop, PC, or device
+    session.permanent = True
+    session["user_id"] = user["id"]
+    session["user_name"] = user["name"]
+    session["user_email"] = user["email"]
+    session["username"] = user.get("username", "")
 
-        session["user_id"] = user["id"]
-        session["user_name"] = user["name"]
-        session["user_email"] = user["email"]
-
-        return jsonify(
-            message="Logged in successfully.",
-            user={"id": user["id"], "name": user["name"], "email": user["email"]}
-        )
-    finally:
-        conn.close()
+    return jsonify(
+        message="Logged in successfully.",
+        user={
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"],
+            "username": user.get("username", ""),
+        }
+    )
 
 
 @auth_bp.route("/logout", methods=["POST"])
@@ -146,21 +137,12 @@ def me():
     if not uid:
         return jsonify(authenticated=False, user=None)
 
-    conn = get_db()
-    try:
-        user = row_to_dict(conn.execute(
-            """SELECT id, name, email, bio, location, github_url,
-                      linkedin_url, phone, job_title, experience_years, created_at
-               FROM users WHERE id = ?""",
-            (uid,)
-        ).fetchone())
-        if not user:
-            session.clear()
-            return jsonify(authenticated=False, user=None)
-        user.pop("password_hash", None)
-        return jsonify(authenticated=True, user=user)
-    finally:
-        conn.close()
+    user = get_user_by_id(uid)
+    if not user:
+        session.clear()
+        return jsonify(authenticated=False, user=None)
+    user.pop("password_hash", None)
+    return jsonify(authenticated=True, user=user)
 
 
 @auth_bp.route("/profile", methods=["PUT"])
@@ -179,30 +161,13 @@ def update_profile():
     if not updates:
         return jsonify(error="No valid fields to update."), 400
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [uid]
-
-    conn = get_db()
     try:
-        conn.execute(
-            f"UPDATE users SET {set_clause} WHERE id = ?",
-            values
-        )
-        conn.commit()
-
-        user = row_to_dict(conn.execute(
-            """SELECT id, name, email, bio, location, github_url,
-                      linkedin_url, phone, job_title, experience_years
-               FROM users WHERE id = ?""",
-            (uid,)
-        ).fetchone())
-
+        user = update_user_profile(uid, updates)
         if "name" in updates:
             session["user_name"] = updates["name"]
-
         return jsonify(message="Profile updated successfully.", user=user)
-    finally:
-        conn.close()
+    except Exception as e:
+        return jsonify(error=f"Update failed: {e}"), 400
 
 
 @auth_bp.route("/password", methods=["PUT"])
@@ -227,11 +192,7 @@ def change_password():
         if not row or not verify_password(row["password_hash"], current):
             return jsonify(error="Current password is incorrect."), 401
 
-        conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
-            (hash_password(new_pw), uid)
-        )
-        conn.commit()
+        update_user_password(uid, new_pw)
         return jsonify(message="Password changed successfully.")
     finally:
         conn.close()

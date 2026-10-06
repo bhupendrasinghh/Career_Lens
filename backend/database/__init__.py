@@ -25,9 +25,12 @@ from backend.database.connection import get_db, init_db, row_to_dict, DB_PATH
 from backend.database.users import (
     create_user,
     get_user_by_email,
+    get_user_by_identifier,
     get_user_by_id,
     update_user_profile,
     update_user_password,
+    verify_password,
+    hash_password,
 )
 from backend.database.resumes import (
     save_resume_to_db,
@@ -54,8 +57,8 @@ __all__ = [
     # Connection
     "get_db", "init_db", "row_to_dict", "DB_PATH",
     # Users
-    "create_user", "get_user_by_email", "get_user_by_id",
-    "update_user_profile", "update_user_password",
+    "create_user", "get_user_by_email", "get_user_by_identifier", "get_user_by_id",
+    "update_user_profile", "update_user_password", "verify_password", "hash_password",
     # Resumes
     "save_resume_to_db", "get_active_resume", "get_all_resumes",
     # Analyses

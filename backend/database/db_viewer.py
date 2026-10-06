@@ -75,7 +75,7 @@ def show_stats(conn):
 def show_users(conn):
     print_header("USERS")
     rows = conn.execute(
-        """SELECT id, name, email, phone, job_title,
+        """SELECT id, name, email, username, phone, job_title,
                   experience_years, created_at
            FROM users ORDER BY id"""
     ).fetchall()

@@ -11,6 +11,8 @@ Plain-text passwords are NEVER stored.
 import hashlib
 import secrets
 import logging
+import re
+from werkzeug.security import check_password_hash
 from backend.database.connection import get_db, row_to_dict
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 # ── Password helpers ──────────────────────────────────────────────────────────
 
 def hash_password(password: str, salt: str = None) -> str:
-    """Return a salted SHA-256 hash in the format  salt:hash."""
+    """Return a salted SHA-256 hash in the format salt:hash."""
     if salt is None:
         salt = secrets.token_hex(16)
     hashed = hashlib.sha256((salt + password).encode()).hexdigest()
@@ -27,56 +29,123 @@ def hash_password(password: str, salt: str = None) -> str:
 
 
 def verify_password(stored_hash: str, provided_password: str) -> bool:
-    """Return True if provided_password matches the stored hash."""
+    """
+    Return True if provided_password matches the stored hash.
+    Supports salted SHA-256 (with constant-time comparison) and Werkzeug hashes.
+    """
+    if not stored_hash or not provided_password:
+        return False
+
+    # Check Werkzeug hash formats (e.g. pbkdf2:sha256:..., scrypt:...)
     try:
-        salt, _ = stored_hash.split(":", 1)
-        return stored_hash == hash_password(provided_password, salt)
+        if stored_hash.startswith(("pbkdf2:", "scrypt:", "argon2:")):
+            return check_password_hash(stored_hash, provided_password)
+    except Exception:
+        pass
+
+    # Check standard salt:sha256 format
+    try:
+        if ":" in stored_hash:
+            salt, hashed = stored_hash.split(":", 1)
+            expected = hashlib.sha256((salt + provided_password).encode()).hexdigest()
+            return secrets.compare_digest(hashed, expected)
+    except Exception:
+        pass
+
+    # Fallback check
+    try:
+        return check_password_hash(stored_hash, provided_password)
     except Exception:
         return False
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
 
-def create_user(name: str, email: str, password: str) -> dict:
+def create_user(name: str, email: str, password: str, username: str = None) -> dict:
     """
-    Create a new user account.
-    Password is hashed before storage — plain text never written to DB.
+    Create a new user account in the central database.
+    Password is saved as a secure hash — plain text never written to DB.
     Returns the created user dict (without password_hash).
-    Raises ValueError if email already exists.
+    Raises ValueError if email or username already exists.
     """
+    name = (name or "").strip()
+    email = (email or "").strip().lower()
+
+    if not name:
+        raise ValueError("Name is required.")
+    if not email:
+        raise ValueError("Email is required.")
+    if not password or len(password) < 8:
+        raise ValueError("Password must be at least 8 characters.")
+
+    if not username:
+        prefix = email.split("@")[0] if "@" in email else email
+        username = re.sub(r"[^a-zA-Z0-9_.]", "", prefix).lower() or f"user_{secrets.token_hex(4)}"
+    else:
+        username = username.strip().lower()
+
     conn = get_db()
     try:
-        existing = conn.execute(
-            "SELECT id FROM users WHERE email = ?", (email.strip().lower(),)
+        # Check existing email
+        existing_email = conn.execute(
+            "SELECT id FROM users WHERE LOWER(email) = ?", (email,)
         ).fetchone()
-        if existing:
+        if existing_email:
             raise ValueError("An account with this email already exists.")
+
+        # Ensure unique username
+        existing_u = conn.execute(
+            "SELECT id FROM users WHERE LOWER(username) = ?", (username,)
+        ).fetchone()
+        if existing_u:
+            base_u = username
+            c_idx = 1
+            while existing_u:
+                username = f"{base_u}{c_idx}"
+                existing_u = conn.execute(
+                    "SELECT id FROM users WHERE LOWER(username) = ?", (username,)
+                ).fetchone()
+                c_idx += 1
 
         ph = hash_password(password)
         cur = conn.execute(
-            "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
-            (name.strip(), email.strip().lower(), ph)
+            """INSERT INTO users (name, email, username, password_hash, created_at, updated_at)
+               VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))""",
+            (name, email, username, ph)
         )
         conn.commit()
         user = row_to_dict(conn.execute(
-            "SELECT id, name, email, created_at FROM users WHERE id = ?",
+            "SELECT id, name, email, username, created_at FROM users WHERE id = ?",
             (cur.lastrowid,)
         ).fetchone())
-        logger.info(f"New user created: id={user['id']} email={user['email']}")
+        logger.info(f"New user created: id={user['id']} email={user['email']} username={user.get('username')}")
         return user
     finally:
         conn.close()
 
 
-def get_user_by_email(email: str) -> dict | None:
-    """Fetch a user by email (includes password_hash for login verification)."""
+def get_user_by_identifier(identifier: str) -> dict | None:
+    """
+    Fetch a user by email OR username (case-insensitive).
+    Includes password_hash for login verification.
+    """
+    if not identifier:
+        return None
+    ident = identifier.strip().lower()
     conn = get_db()
     try:
         return row_to_dict(conn.execute(
-            "SELECT * FROM users WHERE email = ?", (email.strip().lower(),)
+            """SELECT * FROM users
+               WHERE LOWER(email) = ? OR LOWER(username) = ?""",
+            (ident, ident)
         ).fetchone())
     finally:
         conn.close()
+
+
+def get_user_by_email(email: str) -> dict | None:
+    """Fetch a user by email or username (case-insensitive, includes password_hash)."""
+    return get_user_by_identifier(email)
 
 
 def get_user_by_id(user_id: int) -> dict | None:
@@ -84,7 +153,7 @@ def get_user_by_id(user_id: int) -> dict | None:
     conn = get_db()
     try:
         user = row_to_dict(conn.execute(
-            """SELECT id, name, email, phone, bio, location, job_title,
+            """SELECT id, name, email, username, phone, bio, location, job_title,
                       experience_years, github_url, linkedin_url,
                       avatar_url, created_at, updated_at
                FROM users WHERE id = ?""",

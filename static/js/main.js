@@ -217,19 +217,17 @@ el("authModal")?.addEventListener("click", (e) => {
     if (e.target === el("authModal")) closeAuthModal();
 });
 
-function isGmail(email) {
-    return /^[a-zA-Z0-9._%+-]+@gmail\.com$/i.test((email || "").trim());
+function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test((email || "").trim());
 }
 
 // Login
 el("loginBtn")?.addEventListener("click", async () => {
     hideAlert("loginError");
-    const email = el("loginEmail").value.trim();
-    const password = el("loginPassword").value;
-    if (!email || !password) { showAlert("loginError", "Please enter email and password."); return; }
-
-    if (!isGmail(email)) {
-        showAlert("loginError", "Invalid Gmail: Email must end with @gmail.com (e.g. yourname@gmail.com)");
+    const identifier = (el("loginEmail")?.value || "").trim();
+    const password = el("loginPassword")?.value || "";
+    if (!identifier || !password) {
+        showAlert("loginError", "Please enter your email or username and password.");
         return;
     }
 
@@ -238,7 +236,7 @@ el("loginBtn")?.addEventListener("click", async () => {
 
     const { ok, data } = await api("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ identifier, email: identifier, username: identifier, password })
     });
 
     el("loginBtn").textContent = "Sign in";
@@ -248,8 +246,8 @@ el("loginBtn")?.addEventListener("click", async () => {
         State.user = data.user;
         renderAuthState();
         closeAuthModal();
-        el("loginEmail").value = "";
-        el("loginPassword").value = "";
+        if (el("loginEmail")) el("loginEmail").value = "";
+        if (el("loginPassword")) el("loginPassword").value = "";
     } else {
         showAlert("loginError", data.error || "Login failed.");
     }
@@ -258,14 +256,22 @@ el("loginBtn")?.addEventListener("click", async () => {
 // Register
 el("registerBtn")?.addEventListener("click", async () => {
     hideAlert("registerError");
-    const name = el("regName").value.trim();
-    const email = el("regEmail").value.trim();
-    const password = el("regPassword").value;
+    const name = (el("regName")?.value || "").trim();
+    const email = (el("regEmail")?.value || "").trim();
+    const password = el("regPassword")?.value || "";
 
-    if (!name || !email || !password) { showAlert("registerError", "Please fill in all fields."); return; }
+    if (!name || !email || !password) {
+        showAlert("registerError", "Please fill in all fields.");
+        return;
+    }
 
-    if (!isGmail(email)) {
-        showAlert("registerError", "Invalid Gmail: Email must end with @gmail.com (e.g. yourname@gmail.com)");
+    if (!isValidEmail(email)) {
+        showAlert("registerError", "Please enter a valid email address (e.g. yourname@gmail.com).");
+        return;
+    }
+
+    if (password.length < 8) {
+        showAlert("registerError", "Password must be at least 8 characters.");
         return;
     }
 
@@ -284,9 +290,23 @@ el("registerBtn")?.addEventListener("click", async () => {
         State.user = data.user;
         renderAuthState();
         closeAuthModal();
+        if (el("regName")) el("regName").value = "";
+        if (el("regEmail")) el("regEmail").value = "";
+        if (el("regPassword")) el("regPassword").value = "";
     } else {
         showAlert("registerError", data.error || "Registration failed.");
     }
+});
+
+// Submit on Enter keypress in modal inputs
+el("loginPassword")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") el("loginBtn")?.click();
+});
+el("loginEmail")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") el("loginBtn")?.click();
+});
+el("regPassword")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") el("registerBtn")?.click();
 });
 
 // Logout
