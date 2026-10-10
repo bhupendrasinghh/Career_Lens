@@ -91,7 +91,7 @@ docker compose down
 ```bash
 python3 app.py
 ```
-Open [http://127.0.0.1:5001](http://127.0.0.1:5001) in your browser.
+Open [[http://127.0.0.1:5001](http://127.0.0.1:5001)](https://career-lens-xn3t.onrender.com/) in your browser.
 
 ---
 
